@@ -1,0 +1,823 @@
+"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           EGYPT DIGITAL SUN — تحليل الطاقة الشمسية في مصر                  ║
+║           مشروع الألواح الشمسية | Python Analysis & Visualization           ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  البيانات : NASA POWER API (2015–2024)                                      ║
+║  المدن    : أسوان · القاهرة · مطروح · المنيا · الوادي الجديد               ║
+║  المحتوى  : 8 رسوم بيانية منفصلة + داشبورد كاملة                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+المتطلبات (Requirements):
+    pip install pandas matplotlib arabic-reshaper python-bidi openpyxl
+
+تشغيل الكود:
+    python egypt_solar_analysis.py
+
+النتائج:
+    - chart1_solar_by_city.png      → متوسط الإشعاع الشمسي لكل مدينة
+    - chart2_seasonal.png           → الإشعاع الموسمي
+    - chart3_yearly_trend.png       → الاتجاه السنوي (2015-2024)
+    - chart4_monthly_heatmap.png    → الخريطة الحرارية الشهرية
+    - chart5_sky_status.png         → توزيع حالة السماء
+    - chart6_energy_potential.png   → الطاقة المتوقعة لكل مدينة
+    - chart7_temp_vs_solar.png      → العلاقة بين الحرارة والإشعاع
+    - chart8_clearsky_days.png      → نسبة أيام السماء الصافية
+    - dashboard_solar_egypt.png     → داشبورد شاملة لكل التحليلات
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# المكتبات المطلوبة
+# ─────────────────────────────────────────────────────────────────────────────
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.patches as mpatches
+import matplotlib.font_manager as fm
+import numpy as np
+import arabic_reshaper
+from bidi.algorithm import get_display
+
+# ─────────────────────────────────────────────────────────────────────────────
+# إعدادات الخط العربي
+# ─────────────────────────────────────────────────────────────────────────────
+# المسار الافتراضي للخط — غيّره لو عندك مسار مختلف على جهازك
+ARABIC_FONT_PATH = '/usr/share/fonts/truetype/fonts-arabeyes/ae_Furat.ttf'
+
+def ar(text):
+    """
+    دالة لتحويل النص العربي لشكله الصحيح في matplotlib.
+    matplotlib بتكتب العربي بالحروف المنفصلة → arabic_reshaper بيوصلها
+    وpython-bidi بتعكس الاتجاه من يمين لشمال (RTL).
+    """
+    reshaped = arabic_reshaper.reshape(text)
+    return get_display(reshaped)
+
+def ap(size=11):
+    """إرجاع FontProperties للخط العربي بالحجم المطلوب."""
+    return fm.FontProperties(fname=ARABIC_FONT_PATH, size=size)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ألوان المدن والإعدادات العامة
+# ─────────────────────────────────────────────────────────────────────────────
+CITY_COLORS = {
+    'Aswan':     '#FFD700',   # ذهبي  — أسوان
+    'Cairo':     '#58A6FF',   # أزرق  — القاهرة
+    'New_Valley':'#3FB950',   # أخضر  — الوادي الجديد
+    'Matrouh':   '#FF6347',   # برتقالي — مطروح
+    'Minia':     '#DA70D6',   # بنفسجي — المنيا
+}
+
+SEASON_COLORS = {
+    'Winter': '#58A6FF',   # شتاء — أزرق
+    'Spring': '#3FB950',   # ربيع — أخضر
+    'Summer': '#FFD700',   # صيف  — ذهبي
+    'Autumn': '#FF8C00',   # خريف — برتقالي
+}
+
+SEASON_ORDER = ['Winter', 'Spring', 'Summer', 'Autumn']
+
+# مسار ملف البيانات — عدّله حسب مكان الملف على جهازك
+DATA_PATH = 'Egypt_Digital_Sun_Enhanced_Data_2.xlsx'
+SHEET_NAME = 'Egypt_Digital_Sun_Enhanced_Data'
+
+# مجلد حفظ الصور
+OUTPUT_DIR = './'   # '.' = نفس المجلد، غيّره لو عايز مجلد تاني
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# تحميل البيانات
+# ═════════════════════════════════════════════════════════════════════════════
+def load_data(path=DATA_PATH, sheet=SHEET_NAME):
+    """
+    تحميل بيانات الإشعاع الشمسي من ملف Excel.
+
+    الأعمدة الأساسية:
+        City            : اسم المدينة
+        Year            : السنة
+        Month           : الشهر (1-12)
+        Season          : الموسم (Winter/Spring/Summer/Autumn)
+        ALLSKY_SFC_SW_DWN : الإشعاع الشمسي الكلي (kWh/m²/day)
+        T2M             : درجة الحرارة على ارتفاع 2 متر (°C)
+        WS10M           : سرعة الرياح على ارتفاع 10 متر (m/s)
+        RH2M            : الرطوبة النسبية (%)
+        ALLSKY_KT       : مؤشر وضوح السماء (0-1)
+        Sky_Status      : حالة السماء (Clear Sky / Partly Cloudy / Cloudy)
+    """
+    print("📂 جاري تحميل البيانات...")
+    df = pd.read_excel(path, sheet_name=sheet)
+    print(f"✅ تم تحميل {len(df):,} سجل من {df['City'].nunique()} مدن")
+    print(f"   الفترة: {df['Year'].min()} → {df['Year'].max()}")
+    print(f"   الأعمدة: {list(df.columns)}\n")
+    return df
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 1 — متوسط الإشعاع الشمسي لكل مدينة
+# ═════════════════════════════════════════════════════════════════════════════
+def chart1_solar_by_city(df, output_dir=OUTPUT_DIR):
+    """
+    رسم بياني شريطي يوضح متوسط الإشعاع الشمسي اليومي لكل مدينة على مدار
+    الفترة الكاملة (2015-2024).
+
+    الاستخدام:
+        يحدد أفضل المواقع لإنشاء محطات الطاقة الشمسية.
+        الإشعاع العالي = أسوان والوادي الجديد (جنوب مصر) → أولوية قصوى.
+    """
+    print("📊 جاري رسم Chart 1: متوسط الإشعاع الشمسي لكل مدينة...")
+
+    city_avg = df.groupby('City')['ALLSKY_SFC_SW_DWN'].mean().sort_values(ascending=False)
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    colors = [CITY_COLORS[c] for c in city_avg.index]
+    bars = ax.bar(city_avg.index, city_avg.values, color=colors, width=0.6,
+                  edgecolor='none', zorder=3)
+
+    # إضافة القيم فوق كل عمود
+    for bar, val in zip(bars, city_avg.values):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                f'{val:.2f}\nkWh/m²/day',
+                ha='center', va='bottom', color='white',
+                fontsize=11, fontweight='bold')
+
+    ax.grid(axis='y', color='#30363D', linestyle='--', alpha=0.7, zorder=0)
+
+    # خط المتوسط العام
+    ax.axhline(y=city_avg.mean(), color='#58A6FF', linestyle='--',
+               alpha=0.8, linewidth=1.5, zorder=2)
+    ax.text(4.6, city_avg.mean() + 0.1,
+            f'المتوسط: {city_avg.mean():.2f}', color='#58A6FF', fontsize=10)
+
+    ax.set_ylabel(ar('متوسط الإشعاع الشمسي (kWh/m²/day)'),
+                  color='#8B949E', fontproperties=ap(11))
+    ax.set_title(ar('متوسط الإشعاع الشمسي لكل مدينة (2015-2024)') +
+                 '\nAverage Solar Irradiance by City',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    ax.tick_params(colors='#8B949E', labelsize=11)
+    ax.set_ylim(0, 8)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.tight_layout()
+    path = f'{output_dir}chart1_solar_by_city.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 2 — الإشعاع الشمسي حسب الموسم والمدينة
+# ═════════════════════════════════════════════════════════════════════════════
+def chart2_seasonal(df, output_dir=OUTPUT_DIR):
+    """
+    مقارنة الإشعاع الشمسي بين المواسم الأربعة لكل مدينة.
+
+    الاستخدام:
+        يساعد في تخطيط الإنتاج الموسمي وتحديد متى يتضاعف الإنتاج.
+        الصيف ينتج ~50% أكثر من الشتاء — يعوّض ذروة استهلاك الكهرباء.
+    """
+    print("📊 جاري رسم Chart 2: الإشعاع الموسمي...")
+
+    season_city = df.groupby(['City', 'Season'])['ALLSKY_SFC_SW_DWN'].mean().unstack()
+    season_city = season_city[SEASON_ORDER]
+
+    season_ar = {
+        'Winter': ar('شتاء'),
+        'Spring': ar('ربيع'),
+        'Summer': ar('صيف'),
+        'Autumn': ar('خريف'),
+    }
+
+    fig, ax = plt.subplots(figsize=(13, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    cities = season_city.index.tolist()
+    x = np.arange(len(cities))
+    width = 0.2
+
+    for i, season in enumerate(SEASON_ORDER):
+        ax.bar(x + i * width, season_city[season], width,
+               label=f'{season_ar[season]} / {season}',
+               color=SEASON_COLORS[season], alpha=0.9, edgecolor='none')
+
+    ax.set_xticks(x + width * 1.5)
+    ax.set_xticklabels(cities, color='#8B949E', fontsize=11)
+    ax.set_ylabel('kWh/m²/day', color='#8B949E', fontsize=12)
+    ax.set_title(ar('الإشعاع الشمسي حسب الموسم والمدينة') +
+                 '\nSolar Irradiance by Season & City',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    ax.tick_params(colors='#8B949E')
+    ax.grid(axis='y', color='#30363D', linestyle='--', alpha=0.7)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    legend = ax.legend(title=ar('الموسم'), facecolor='#21262D',
+                       edgecolor='#30363D', labelcolor='white', prop=ap(10))
+    legend.get_title().set_color('white')
+
+    plt.tight_layout()
+    path = f'{output_dir}chart2_seasonal.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 3 — الاتجاه السنوي للإشعاع الشمسي (2015-2024)
+# ═════════════════════════════════════════════════════════════════════════════
+def chart3_yearly_trend(df, output_dir=OUTPUT_DIR):
+    """
+    رسم خطي يتتبع تطور الإشعاع الشمسي سنة بسنة لكل مدينة.
+
+    الاستخدام:
+        يثبت استدامة المصدر الشمسي على مدى 10 سنين.
+        القيم الثابتة = مصدر موثوق للتخطيط طويل الأمد (20-30 سنة).
+        الخط المتقطع = خط الاتجاه (Trendline) لكل مدينة.
+    """
+    print("📊 جاري رسم Chart 3: الاتجاه السنوي...")
+
+    yearly = df.groupby(['Year', 'City'])['ALLSKY_SFC_SW_DWN'].mean().unstack()
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    for city in yearly.columns:
+        # رسم الخط الأساسي
+        ax.plot(yearly.index, yearly[city], marker='o', linewidth=2.5,
+                markersize=6, color=CITY_COLORS[city], label=city, zorder=3)
+
+        # إضافة خط الاتجاه (Polynomial Degree 1 = خط مستقيم)
+        z = np.polyfit(yearly.index, yearly[city], 1)
+        p = np.poly1d(z)
+        ax.plot(yearly.index, p(yearly.index), '--',
+                alpha=0.4, color=CITY_COLORS[city], linewidth=1)
+
+    ax.set_ylabel('kWh/m²/day', color='#8B949E', fontsize=12)
+    ax.set_title(ar('الاتجاه السنوي للإشعاع الشمسي (2015-2024)') +
+                 '\nYearly Solar Irradiance Trend per City',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    ax.set_xticks(yearly.index)
+    ax.tick_params(colors='#8B949E', labelsize=11)
+    ax.grid(color='#30363D', linestyle='--', alpha=0.5)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.legend(facecolor='#21262D', edgecolor='#30363D',
+              labelcolor='white', fontsize=10)
+
+    plt.tight_layout()
+    path = f'{output_dir}chart3_yearly_trend.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 4 — الخريطة الحرارية الشهرية
+# ═════════════════════════════════════════════════════════════════════════════
+def chart4_monthly_heatmap(df, output_dir=OUTPUT_DIR):
+    """
+    Heatmap يعرض 60 قيمة (5 مدن × 12 شهر) بألوان حرارية.
+
+    الاستخدام:
+        يكشف الأنماط الشهرية التي يصعب رؤيتها في الجداول.
+        اللون الأحمر الداكن = إشعاع مرتفع (يونيو-أغسطس).
+        اللون الأزرق = إشعاع منخفض (ديسمبر-يناير).
+        أسوان والوادي الجديد يحافظان على ألوان دافئة حتى الشتاء.
+    """
+    print("📊 جاري رسم Chart 4: الخريطة الحرارية الشهرية...")
+
+    pivot = df.groupby(['City', 'Month'])['ALLSKY_SFC_SW_DWN'].mean().unstack()
+    months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    pivot.columns = months
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    im = ax.imshow(pivot.values, cmap='YlOrRd', aspect='auto', vmin=3, vmax=9)
+
+    ax.set_xticks(range(12))
+    ax.set_xticklabels(months, color='#8B949E', fontsize=11)
+    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticklabels(pivot.index, color='#8B949E', fontsize=12)
+
+    # إضافة القيم داخل كل خلية
+    for i in range(len(pivot.index)):
+        for j in range(12):
+            val = pivot.values[i, j]
+            text_color = 'black' if val > 6.5 else 'white'
+            ax.text(j, i, f'{val:.1f}', ha='center', va='center',
+                    color=text_color, fontsize=10, fontweight='bold')
+
+    ax.set_title(ar('خريطة حرارية - الإشعاع الشمسي الشهري لكل مدينة') +
+                 '\nMonthly Solar Irradiance Heatmap',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    cbar = plt.colorbar(im, ax=ax, pad=0.02)
+    cbar.ax.tick_params(colors='#8B949E')
+    cbar.set_label('kWh/m²/day', color='#8B949E', fontsize=11)
+    for spine in ax.spines.values():
+        spine.set_edgecolor('#30363D')
+
+    plt.tight_layout()
+    path = f'{output_dir}chart4_monthly_heatmap.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 5 — توزيع حالة السماء
+# ═════════════════════════════════════════════════════════════════════════════
+def chart5_sky_status(df, output_dir=OUTPUT_DIR):
+    """
+    Pie charts تُظهر توزيع حالة السماء (صحو / غيوم جزئية / غائم) لكل مدينة.
+
+    الاستخدام:
+        يقيّم موثوقية الإنتاج اليومي.
+        أسوان والوادي الجديد: >95% صحو = إنتاج مستدام جداً.
+        مطروح: 61% صحو فقط = تحتاج وحدات تخزين إضافية.
+    """
+    print("📊 جاري رسم Chart 5: توزيع حالة السماء...")
+
+    sky_labels  = ['Clear Sky', 'Partly Cloudy', 'Cloudy']
+    sky_ar      = [ar('صحو'), ar('غيوم جزئية'), ar('غائم')]
+    sky_colors  = ['#FFD700', '#87CEEB', '#708090']
+    cities      = df['City'].unique()
+
+    fig, axes = plt.subplots(1, 5, figsize=(16, 7))
+    fig.patch.set_facecolor('#0D1117')
+
+    for ax, city in zip(axes, cities):
+        ax.set_facecolor('#161B22')
+        sky_counts = df[df['City'] == city]['Sky_Status'].value_counts()
+        ordered = [sky_counts.get(s, 0) for s in sky_labels]
+
+        wedges, texts, autotexts = ax.pie(
+            ordered, colors=sky_colors, autopct='%1.0f%%', startangle=90,
+            wedgeprops=dict(edgecolor='#0D1117', linewidth=2),
+            textprops=dict(color='white', fontsize=10)
+        )
+        for at in autotexts:
+            at.set_fontsize(10)
+            at.set_fontweight('bold')
+        ax.set_title(city, color='white', fontsize=12, fontweight='bold', pad=10)
+
+    legend_patches = [
+        plt.matplotlib.patches.Patch(color=c, label=f'{a} / {e}')
+        for c, a, e in zip(sky_colors, sky_ar, sky_labels)
+    ]
+    fig.legend(handles=legend_patches, loc='lower center', ncol=3,
+               facecolor='#21262D', edgecolor='#30363D', labelcolor='white',
+               prop=ap(10), bbox_to_anchor=(0.5, -0.02))
+
+    fig.suptitle(ar('توزيع حالة السماء لكل مدينة') + '\nSky Status Distribution by City',
+                 color='white', fontproperties=ap(14), y=1.02)
+
+    plt.tight_layout()
+    path = f'{output_dir}chart5_sky_status.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 6 — الطاقة الشمسية المتوقعة لكل مدينة
+# ═════════════════════════════════════════════════════════════════════════════
+def chart6_energy_potential(df, output_dir=OUTPUT_DIR):
+    """
+    رسم أفقي يُقدّر الطاقة الكهربية المولّدة لكل كيلومتر مربع من الألواح.
+
+    المعادلة:
+        طاقة (GWh/year) = إشعاع يومي × مساحة الألواح × كفاءة × 365 يوم
+        الافتراضات: مساحة 1 كم² (1,000,000 م²)، كفاءة 20%
+
+    الاستخدام:
+        يُقنع صانع القرار بالأرقام الاقتصادية الملموسة.
+        كل كم² من أسوان = ~474 GWh/سنة = يكفي أكثر من 100,000 بيت مصري.
+    """
+    print("📊 جاري رسم Chart 6: الطاقة المتوقعة...")
+
+    city_avg = df.groupby('City')['ALLSKY_SFC_SW_DWN'].mean()
+
+    panel_area  = 1_000_000   # 1 كم² = مليون م²
+    efficiency  = 0.20        # كفاءة الألواح 20%
+    energy_gwh  = city_avg * panel_area * efficiency * 365 / 1e9 * 1000
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    sorted_energy = energy_gwh.sort_values(ascending=True)
+    colors_grad   = ['#FF4500', '#FF6347', '#FFA500', '#FFD700', '#FFEC8B']
+
+    bars = ax.barh(sorted_energy.index, sorted_energy.values,
+                   color=colors_grad, edgecolor='none', height=0.55)
+
+    for bar, val in zip(bars, sorted_energy.values):
+        ax.text(bar.get_width() + 5, bar.get_y() + bar.get_height() / 2,
+                f'{val:.0f} GWh/year', va='center', color='white',
+                fontsize=11, fontweight='bold')
+
+    ax.set_xlabel(ar('الطاقة المقدرة (GWh/year) لكل كم²'),
+                  color='#8B949E', fontproperties=ap(11), labelpad=10)
+    ax.set_title(ar('الطاقة الشمسية المتوقعة لكل مدينة') +
+                 '\nEstimated Solar Energy Potential per km² of Panels',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    ax.tick_params(colors='#8B949E', labelsize=12)
+    ax.grid(axis='x', color='#30363D', linestyle='--', alpha=0.6)
+    ax.set_xlim(0, sorted_energy.max() * 1.3)
+
+    note = ar('* كفاءة ألواح 20% ومساحة 1 كم²')
+    ax.text(0.98, 0.05, note, transform=ax.transAxes,
+            color='#8B949E', fontsize=9, ha='right', va='bottom',
+            fontproperties=ap(9))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.tight_layout()
+    path = f'{output_dir}chart6_energy_potential.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 7 — العلاقة بين درجة الحرارة والإشعاع الشمسي
+# ═════════════════════════════════════════════════════════════════════════════
+def chart7_temp_vs_solar(df, output_dir=OUTPUT_DIR):
+    """
+    Scatter Plot يوضح العلاقة بين درجة الحرارة والإشعاع الشمسي اليومي.
+
+    الناتج:
+        معامل الارتباط r — قيمة موجبة = الأيام الأحر فيها إشعاع أعلى.
+
+    الاستخدام:
+        يُثبت أن الأنماط الموسمية ليست عشوائية بل متوقعة وقابلة للتخطيط.
+        الخط المتقطع الأبيض = خط الاتجاه العام لكل المدن مجتمعة.
+    """
+    print("📊 جاري رسم Chart 7: الحرارة vs الإشعاع...")
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    for city, group in df.groupby('City'):
+        # عيّنة عشوائية لتجنب الازدحام في الرسم
+        sample = group.sample(min(500, len(group)), random_state=42)
+        ax.scatter(sample['T2M'], sample['ALLSKY_SFC_SW_DWN'],
+                   color=CITY_COLORS[city], alpha=0.4, s=20, label=city)
+
+    # خط الاتجاه العام (Linear Regression)
+    z  = np.polyfit(df['T2M'], df['ALLSKY_SFC_SW_DWN'], 1)
+    p  = np.poly1d(z)
+    xl = np.linspace(df['T2M'].min(), df['T2M'].max(), 100)
+    ax.plot(xl, p(xl), color='white', linewidth=2, linestyle='--', alpha=0.7)
+
+    ax.set_xlabel(ar('درجة الحرارة (°C)'),
+                  color='#8B949E', fontproperties=ap(12), labelpad=10)
+    ax.set_ylabel(ar('الإشعاع الشمسي (kWh/m²/day)'),
+                  color='#8B949E', fontproperties=ap(12))
+    ax.set_title(ar('العلاقة بين درجة الحرارة والإشعاع الشمسي') +
+                 '\nTemperature vs Solar Irradiance',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    # حساب وعرض معامل الارتباط
+    corr = df[['T2M', 'ALLSKY_SFC_SW_DWN']].corr().iloc[0, 1]
+    ax.text(0.05, 0.95,
+            f'r = {corr:.3f}',
+            transform=ax.transAxes, color='#58A6FF',
+            fontsize=11, fontweight='bold',
+            bbox=dict(boxstyle='round', facecolor='#21262D', edgecolor='#30363D'))
+
+    ax.tick_params(colors='#8B949E', labelsize=11)
+    ax.grid(color='#30363D', linestyle='--', alpha=0.4)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.legend(facecolor='#21262D', edgecolor='#30363D',
+              labelcolor='white', fontsize=11)
+
+    plt.tight_layout()
+    path = f'{output_dir}chart7_temp_vs_solar.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Chart 8 — نسبة أيام السماء الصافية
+# ═════════════════════════════════════════════════════════════════════════════
+def chart8_clearsky_days(df, output_dir=OUTPUT_DIR):
+    """
+    أشرطة رأسية تعرض نسبة أيام الصحو التام لكل مدينة خلال السنة.
+
+    الاستخدام:
+        أهم مؤشر لاختيار موقع المحطة.
+        95% صحو (أسوان) = 349 يوم مضمون سنوياً.
+        61% صحو (مطروح) = يحتاج وحدات تخزين أكبر لتعويض أيام السحاب.
+    """
+    print("📊 جاري رسم Chart 8: نسبة أيام الصحو...")
+
+    clear_pct = df.groupby('City').apply(
+        lambda x: (x['Sky_Status'] == 'Clear Sky').sum() / len(x) * 100
+    ).sort_values(ascending=False)
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    fig.patch.set_facecolor('#0D1117')
+    ax.set_facecolor('#161B22')
+
+    colors = ['#FFD700', '#FFA500', '#FF8C00', '#FF6347', '#58A6FF']
+    bars = ax.bar(clear_pct.index, clear_pct.values, color=colors,
+                  width=0.55, edgecolor='none', zorder=3)
+
+    for bar, (city, val) in zip(bars, clear_pct.items()):
+        days_year = val * 3.65   # 365 * val/100
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.5,
+                f'{val:.1f}%\n({days_year:.0f} days/yr)',
+                ha='center', va='bottom', color='white',
+                fontsize=11, fontweight='bold')
+
+    ax.set_ylabel(ar('نسبة أيام الصحو (%)'),
+                  color='#8B949E', fontproperties=ap(12))
+    ax.set_title(ar('نسبة أيام السماء الصافية لكل مدينة') +
+                 '\nClear Sky Days Percentage per City',
+                 color='white', fontproperties=ap(14), pad=20)
+
+    ax.tick_params(colors='#8B949E', labelsize=12)
+    ax.grid(axis='y', color='#30363D', linestyle='--', alpha=0.6)
+    ax.set_ylim(0, 100)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.tight_layout()
+    path = f'{output_dir}chart8_clearsky_days.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Dashboard — الداشبورد الشاملة (كل الرسوم في صورة واحدة)
+# ═════════════════════════════════════════════════════════════════════════════
+def build_dashboard(df, output_dir=OUTPUT_DIR):
+    """
+    داشبورد كاملة تجمع كل التحليلات في صورة واحدة (22×28 بوصة).
+
+    المحتوى:
+        Row 0: 3 بطاقات KPI (أهم الأرقام)
+        Row 1: Chart 1 (شريطي) + Chart 6 (طاقة متوقعة)
+        Row 2: Chart 3 (اتجاه سنوي)
+        Row 3: Chart 4 (Heatmap) + Chart 2 (موسمي)
+        Row 4: Chart 8 (صحو%) + Chart 7 (scatter) + KT Index
+
+    الاستخدام:
+        مناسبة للعروض التقديمية والتقارير والمؤتمرات.
+    """
+    print("📊 جاري بناء الداشبورد الشاملة...")
+
+    # ── بيانات مسبقة الحساب ───────────────────────────────────────────────
+    city_avg    = df.groupby('City')['ALLSKY_SFC_SW_DWN'].mean().sort_values(ascending=False)
+    yearly      = df.groupby(['Year', 'City'])['ALLSKY_SFC_SW_DWN'].mean().unstack()
+    season_city = df.groupby(['City', 'Season'])['ALLSKY_SFC_SW_DWN'].mean().unstack()
+    pivot_hm    = df.groupby(['City', 'Month'])['ALLSKY_SFC_SW_DWN'].mean().unstack()
+    months_lbl  = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    pivot_hm.columns = months_lbl
+
+    clear_pct  = df.groupby('City').apply(
+        lambda x: (x['Sky_Status'] == 'Clear Sky').sum() / len(x) * 100
+    )
+    energy_gwh = city_avg * 1_000_000 * 0.20 * 365 / 1e9 * 1000
+
+    # ── إنشاء الشكل ───────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(22, 28))
+    fig.patch.set_facecolor('#0D1117')
+    gs  = gridspec.GridSpec(5, 3, figure=fig,
+                            hspace=0.60, wspace=0.38,
+                            left=0.06, right=0.97, top=0.93, bottom=0.04)
+
+    # ── العنوان الرئيسي ────────────────────────────────────────────────────
+    fig.text(0.5, 0.965, '☀  Egypt Solar Energy Dashboard  ☀',
+             ha='center', color='#FFD700', fontsize=26, fontweight='bold')
+    fig.text(0.5, 0.950,
+             ar('تحليل شامل لبيانات الإشعاع الشمسي في مصر (2015-2024)'),
+             ha='center', color='#8B949E', fontproperties=ap(13))
+
+    def style_ax(ax, ar_title, en_title=''):
+        """دالة مساعدة لتنسيق المحاور."""
+        ax.set_facecolor('#161B22')
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.tick_params(colors='#8B949E', labelsize=9)
+        full_title = ar(ar_title) + (f'\n{en_title}' if en_title else '')
+        ax.set_title(full_title, color='white', fontproperties=ap(10), pad=8)
+        ax.grid(color='#30363D', linestyle='--', alpha=0.5, zorder=0)
+
+    # ── Row 0: بطاقات KPI ─────────────────────────────────────────────────
+    kpis = [
+        (ar('أعلى إشعاع شمسي'), 'Top City: Aswan',
+         f'{city_avg["Aswan"]:.2f} kWh/m²/d', '#FFD700'),
+        (ar('متوسط الإشعاع الكلي'), 'Overall Average',
+         f'{df["ALLSKY_SFC_SW_DWN"].mean():.2f} kWh/m²/d', '#3FB950'),
+        (ar('نسبة أيام الصحو — أسوان'), 'Clear Sky Days',
+         f'{clear_pct["Aswan"]:.0f}%  ({clear_pct["Aswan"] * 3.65:.0f} days/yr)', '#58A6FF'),
+    ]
+    for col, (label_ar, label_en, val, color) in enumerate(kpis):
+        ax_k = fig.add_subplot(gs[0, col])
+        ax_k.set_facecolor('#161B22')
+        for sp in ax_k.spines.values():
+            sp.set_edgecolor('#30363D')
+        ax_k.set_xticks([]); ax_k.set_yticks([])
+        ax_k.text(0.5, 0.62, val, transform=ax_k.transAxes,
+                  ha='center', color=color, fontsize=17, fontweight='bold')
+        ax_k.text(0.5, 0.35, label_ar, transform=ax_k.transAxes,
+                  ha='center', color='white', fontproperties=ap(10))
+        ax_k.text(0.5, 0.12, label_en, transform=ax_k.transAxes,
+                  ha='center', color='#8B949E', fontsize=9)
+        rect = mpatches.FancyBboxPatch((0.02, 0.02), 0.96, 0.96,
+                                       boxstyle="round,pad=0.02",
+                                       linewidth=2, edgecolor=color,
+                                       facecolor='#161B22',
+                                       transform=ax_k.transAxes)
+        ax_k.add_patch(rect)
+
+    # ── Row 1: Chart 1 + طاقة متوقعة ──────────────────────────────────────
+    ax1 = fig.add_subplot(gs[1, 0:2])
+    style_ax(ax1, 'متوسط الإشعاع الشمسي لكل مدينة', 'Avg Solar Irradiance by City')
+    bars = ax1.bar(city_avg.index, city_avg.values,
+                   color=[CITY_COLORS[c] for c in city_avg.index],
+                   width=0.55, edgecolor='none', zorder=3)
+    for bar, val in zip(bars, city_avg.values):
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.04,
+                 f'{val:.2f}', ha='center', va='bottom',
+                 color='white', fontsize=9, fontweight='bold')
+    ax1.set_ylabel('kWh/m²/day', color='#8B949E', fontsize=9)
+    ax1.axhline(city_avg.mean(), color='white', linestyle='--', alpha=0.4, linewidth=1.2)
+    ax1.set_ylim(0, 8)
+
+    ax2 = fig.add_subplot(gs[1, 2])
+    style_ax(ax2, 'الطاقة المتوقعة (GWh/km²/سنة)', 'Energy Potential')
+    sorted_e = energy_gwh.sort_values()
+    ax2.barh(sorted_e.index, sorted_e.values,
+             color=[CITY_COLORS[c] for c in sorted_e.index],
+             edgecolor='none', height=0.5)
+    for i, (city, val) in enumerate(sorted_e.items()):
+        ax2.text(val + 2, i, f'{val:.0f}', va='center',
+                 color='white', fontsize=8, fontweight='bold')
+    ax2.set_xlabel('GWh/year', color='#8B949E', fontsize=9)
+    ax2.set_xlim(0, sorted_e.max() * 1.3)
+
+    # ── Row 2: Chart 3 (Yearly Trend) ──────────────────────────────────────
+    ax3 = fig.add_subplot(gs[2, :])
+    style_ax(ax3, 'الاتجاه السنوي للإشعاع الشمسي (2015-2024)',
+             'Yearly Solar Irradiance Trend')
+    for city in yearly.columns:
+        ax3.plot(yearly.index, yearly[city], marker='o', linewidth=2,
+                 markersize=5, color=CITY_COLORS[city], label=city, zorder=3)
+    ax3.set_ylabel('kWh/m²/day', color='#8B949E', fontsize=9)
+    ax3.set_xticks(yearly.index)
+    ax3.legend(facecolor='#21262D', edgecolor='#30363D',
+               labelcolor='white', fontsize=9, loc='lower right')
+
+    # ── Row 3: Heatmap + Seasonal ──────────────────────────────────────────
+    ax4 = fig.add_subplot(gs[3, 0:2])
+    ax4.set_facecolor('#161B22')
+    for sp in ax4.spines.values():
+        sp.set_edgecolor('#30363D')
+    ax4.set_title(ar('خريطة حرارية شهرية') + '\nMonthly Heatmap (kWh/m²/day)',
+                  color='white', fontproperties=ap(10), pad=8)
+    im = ax4.imshow(pivot_hm.values, cmap='YlOrRd', aspect='auto', vmin=3, vmax=9)
+    ax4.set_xticks(range(12)); ax4.set_xticklabels(months_lbl, color='#8B949E', fontsize=9)
+    ax4.set_yticks(range(len(pivot_hm.index)))
+    ax4.set_yticklabels(pivot_hm.index, color='#8B949E', fontsize=9)
+    for i in range(len(pivot_hm.index)):
+        for j in range(12):
+            v = pivot_hm.values[i, j]
+            ax4.text(j, i, f'{v:.1f}', ha='center', va='center',
+                     color='black' if v > 6.5 else 'white',
+                     fontsize=7.5, fontweight='bold')
+    cb = plt.colorbar(im, ax=ax4, pad=0.01, shrink=0.9)
+    cb.ax.tick_params(colors='#8B949E', labelsize=8)
+
+    ax5 = fig.add_subplot(gs[3, 2])
+    style_ax(ax5, 'الإشعاع الموسمي', 'Seasonal Irradiance')
+    x = np.arange(len(season_city.index)); w = 0.2
+    season_city_ordered = season_city[SEASON_ORDER]
+    for i, s in enumerate(SEASON_ORDER):
+        ax5.bar(x + i * w, season_city_ordered[s], w, label=s,
+                color=SEASON_COLORS[s], alpha=0.9, edgecolor='none')
+    ax5.set_xticks(x + w * 1.5)
+    ax5.set_xticklabels(season_city_ordered.index, color='#8B949E',
+                        fontsize=7, rotation=15)
+    ax5.set_ylabel('kWh/m²/day', color='#8B949E', fontsize=8)
+    ax5.legend(facecolor='#21262D', edgecolor='#30363D',
+               labelcolor='white', fontsize=7)
+
+    # ── Row 4: Clear Sky % + Scatter + KT ─────────────────────────────────
+    ax6 = fig.add_subplot(gs[4, 0])
+    style_ax(ax6, 'نسبة أيام الصحو %', 'Clear Sky Days %')
+    sorted_cs = clear_pct.sort_values(ascending=False)
+    ax6.bar(sorted_cs.index, sorted_cs.values,
+            color=[CITY_COLORS[c] for c in sorted_cs.index],
+            width=0.55, edgecolor='none', zorder=3)
+    for i, (c, v) in enumerate(sorted_cs.items()):
+        ax6.text(i, v + 0.5, f'{v:.0f}%', ha='center',
+                 color='white', fontsize=9, fontweight='bold')
+    ax6.set_ylim(0, 100); ax6.set_ylabel('%', color='#8B949E', fontsize=9)
+
+    ax7 = fig.add_subplot(gs[4, 1])
+    style_ax(ax7, 'درجة الحرارة مقابل الإشعاع', 'Temp vs Solar Irradiance')
+    for city, group in df.groupby('City'):
+        s = group.sample(min(300, len(group)), random_state=42)
+        ax7.scatter(s['T2M'], s['ALLSKY_SFC_SW_DWN'],
+                    color=CITY_COLORS[city], alpha=0.35, s=8, label=city)
+    z  = np.polyfit(df['T2M'], df['ALLSKY_SFC_SW_DWN'], 1)
+    xl = np.linspace(df['T2M'].min(), df['T2M'].max(), 100)
+    ax7.plot(xl, np.poly1d(z)(xl), color='white',
+             linewidth=1.5, linestyle='--', alpha=0.6)
+    ax7.set_xlabel('Temp (°C)', color='#8B949E', fontsize=9)
+    ax7.set_ylabel('kWh/m²/day', color='#8B949E', fontsize=9)
+    corr = df[['T2M', 'ALLSKY_SFC_SW_DWN']].corr().iloc[0, 1]
+    ax7.text(0.05, 0.92, f'r = {corr:.3f}', transform=ax7.transAxes,
+             color='#58A6FF', fontsize=10, fontweight='bold')
+
+    ax8 = fig.add_subplot(gs[4, 2])
+    style_ax(ax8, 'مؤشر الوضوح ALLSKY_KT', 'Clearness Index by City')
+    kt_city = df.groupby('City')['ALLSKY_KT'].mean().sort_values(ascending=False)
+    ax8.barh(kt_city.index, kt_city.values,
+             color=[CITY_COLORS[c] for c in kt_city.index],
+             edgecolor='none', height=0.5)
+    for i, (c, v) in enumerate(kt_city.items()):
+        ax8.text(v + 0.002, i, f'{v:.3f}', va='center',
+                 color='white', fontsize=9, fontweight='bold')
+    ax8.set_xlabel('KT Index', color='#8B949E', fontsize=9)
+    ax8.set_xlim(0, 0.85)
+    ax8.axvline(0.6, color='#FFD700', linestyle='--', alpha=0.6, linewidth=1)
+    ax8.text(0.61, -0.5, '0.6 threshold', color='#FFD700', fontsize=7)
+
+    # ── Footer ─────────────────────────────────────────────────────────────
+    fig.text(0.5, 0.012,
+             'Egypt Digital Sun Project  |  Data: NASA POWER (2015-2024)'
+             '  |  Cities: Aswan, Cairo, New Valley, Matrouh, Minia',
+             ha='center', color='#8B949E', fontsize=9)
+
+    path = f'{output_dir}dashboard_solar_egypt.png'
+    plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    plt.close()
+    print(f"   ✅ تم الحفظ: {path}\n")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# الدالة الرئيسية — Main
+# ═════════════════════════════════════════════════════════════════════════════
+def main():
+    """
+    تشغيل كل التحليلات بالترتيب:
+        1. تحميل البيانات
+        2. رسم الـ 8 charts منفردة
+        3. بناء الداشبورد الشاملة
+    """
+    print("=" * 70)
+    print("   EGYPT DIGITAL SUN — تحليل الطاقة الشمسية")
+    print("=" * 70)
+
+    # تحميل البيانات
+    df = load_data()
+
+    # رسم كل chart على حدة
+    chart1_solar_by_city(df)
+    chart2_seasonal(df)
+    chart3_yearly_trend(df)
+    chart4_monthly_heatmap(df)
+    chart5_sky_status(df)
+    chart6_energy_potential(df)
+    chart7_temp_vs_solar(df)
+    chart8_clearsky_days(df)
+
+    # بناء الداشبورد الشاملة
+    build_dashboard(df)
+
+    print("=" * 70)
+    print("✅ تم إنشاء كل الملفات بنجاح!")
+    print(f"   المجلد: {OUTPUT_DIR}")
+    print("=" * 70)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# نقطة البداية
+# ─────────────────────────────────────────────────────────────────────────────
+if __name__ == '__main__':
+    main()

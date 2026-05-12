@@ -1,0 +1,64 @@
+import requests
+import pandas as pd
+import time
+
+# 1. قائمة المحافظات (يمكنك إضافة المزيد بسهولة)
+locations = {
+    "Aswan": {"lat": 24.08, "lon": 32.89},
+    "Cairo": {"lat": 30.04, "lon": 31.23},
+    "New_Valley": {"lat": 25.44, "lon": 30.55},
+    "Matrouh": {"lat": 31.35, "lon": 27.23},
+    "Minia": {"lat": 28.09, "lon": 30.75}
+}
+
+# 2. إضافة متغيرات جديدة: KT (صفاء السماء)، PS (الضغط الجوي)، WD10M (اتجاة الرياح)
+parameters = "ALLSKY_SFC_SW_DWN,T2M,RH2M,WS10M,WD10M,PRECTOTCORR,KT,PS"
+start_date = "20150101"
+end_date = "20241231"
+
+all_frames = []
+
+for city, coords in locations.items():
+    print(f"جاري سحب البيانات الموسعة لـ {city}...")
+    url = f"https://power.larc.nasa.gov/api/temporal/daily/point?parameters={parameters}&community=RE&longitude={coords['lon']}&latitude={coords['lat']}&start={start_date}&end={end_date}&format=JSON"
+    
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        df = pd.DataFrame(data['properties']['parameter'])
+        df.index.name = 'Date'
+        df.reset_index(inplace=True)
+        
+        # --- إضافة أعمدة جديدة برمجياً (Feature Engineering) ---
+        
+        # تحويل التاريخ لشكل مفهوم (YYYY-MM-DD)
+        df['Date'] = pd.to_datetime(df['Date'])
+        
+        # 1. أعمدة التاريخ المنفصلة (تسهل التحليل الشهري والسنوي)
+        df['Year'] = df['Date'].dt.year
+        df['Month'] = df['Date'].dt.month
+        
+        # 2. # حساب الكفاءة (لو T2M موجود)
+        if 'T2M' in df.columns:
+            df['Estimated_Efficiency'] = df['T2M'].apply(lambda x: 100 - (max(0, x - 25) * 0.5))
+        
+        # حساب حالة الجو (لو KT موجود)
+        if 'KT' in df.columns:
+            df['Sky_Status'] = df['KT'].apply(lambda x: 'Clear' if x > 0.5 else 'Cloudy')
+        else:
+            df['Sky_Status'] = 'Unknown' # 
+        df['City'] = city
+        all_frames.append(df)
+        time.sleep(1)
+
+# دمج كل شيء
+final_master_df = pd.concat(all_frames, ignore_index=True)
+final_master_df.to_csv("Egypt_Digital_Sun_Enhanced_Data.csv", index=False)
+print(f"تم الانتهاء! الملف الآن يحتوي على {len(final_master_df.columns)} عموداً.")
+
+# كود سريع لمعرفة أفضل شهر في كل محافظة
+summary = final_master_df.groupby(['City', 'Month'])['ALLSKY_SFC_SW_DWN'].mean().reset_index()
+best_months = summary.loc[summary.groupby('City')['ALLSKY_SFC_SW_DWN'].idxmax()]
+
+print("\n--- تقرير أفضل الشهور للإنتاج الشمسي ---")
+print(best_months[['City', 'Month', 'ALLSKY_SFC_SW_DWN']])
